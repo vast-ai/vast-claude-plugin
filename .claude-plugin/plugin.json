@@ -1,0 +1,10 @@
+{
+  "name": "vastai",
+  "description": "Manage Vast.ai GPU instances, volumes, serverless endpoints, and billing from Claude Code. Natural-language driven via the bundled vastai skill, with three slash commands for hot-path operations.",
+  "author": {
+    "name": "Vast.ai",
+    "url": "https://vast.ai"
+  },
+  "homepage": "https://vast.ai",
+  "keywords": ["gpu", "cloud", "ml", "vast", "vastai", "instances", "serverless"]
+}
