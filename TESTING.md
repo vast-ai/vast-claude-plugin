@@ -1,187 +1,271 @@
-# Manual testing — `vast-claude-plugin`
+# Self-test plan — `vast-claude-plugin`
 
-How to take this plugin for a real spin against your Vast.ai account from the shell. Three modes, from cheapest to most realistic.
+A runbook to verify the plugin end-to-end. Behavioral phases (1–4) are run inside a live `claude` session by pasting prompts and observing responses; install/mechanics phases (0, 5) are automated. Launches real GPU instances and incurs real charges.
+
+---
+
+## Budget
+
+- **Hard cap:** $2.00 of Vast credit.
+- **Typical spend:** $0.20–$0.50 (a few minutes of RTX 4090 at ~$0.30/hr).
+- **Abort the run if** pre-flight balance is under $2.
 
 ---
 
 ## Prerequisites
 
-- `vastai` 1.0.x on PATH:
-  ```bash
-  uv tool install --force vastai
-  vastai --version       # → 1.0.13 or newer
-  ```
-- A working Vast.ai account with credit. Get a key from <https://cloud.vast.ai/account>.
-- `claude` CLI on PATH, logged in (`claude /login` once) so OAuth credentials live at `~/.claude/.credentials.json`.
-- This repo cloned somewhere; we'll call its path `$PLUGIN`:
-  ```bash
-  PLUGIN=/path/to/vast-claude-plugin
-  ```
-- An env file with your keys (use the project's `set-env.sh` or build your own). At minimum it should export `VAST_API_KEY`.
-
-### Critical gotcha — unset the Anthropic API key before running
-
-If your env file exports `ANTHROPIC_API_KEY=sk-ant-api03-…` (a real API key), `claude` will prefer it over your OAuth credentials. That means **burning paid API credits** and getting an "Invalid API key" error if the key isn't current. Always do this before launching `claude`:
-
 ```bash
-source ./set-env.sh
-unset ANTHROPIC_API_KEY CLAUDE_API_KEY
-```
+# 1. vastai CLI
+vastai --version                           # → 1.0.13 or newer
 
-OAuth-token-shaped `ANTHROPIC_API_KEY` values (those starting with `sk-ant-oat`) are safe to leave set — they go through your subscription.
+# 2. Vast API key in env (must be set BEFORE claude was started)
+echo "${VAST_API_KEY:?must export VAST_API_KEY first}"
 
----
+# 3. claude CLI on PATH, logged into a subscription (not paid API)
+which claude
+unset ANTHROPIC_API_KEY CLAUDE_API_KEY     # force OAuth path
 
-## Mode 1 — Interactive session (start here)
-
-This is the way a real user will use the plugin.
-
-```bash
-source ./set-env.sh
-unset ANTHROPIC_API_KEY CLAUDE_API_KEY
-claude --plugin-dir "$PLUGIN"
-```
-
-Inside the session, try:
-
-| Try | What you should see |
-|---|---|
-| `/help` | The five `vastai` plugin commands listed: `setup`, `status`, `cost`, `search`, `launch` |
-| `/vastai:status` | Either a list of running instances or "you have 0 instances" |
-| `/vastai:cost` | Your account email, credit balance, active $/hr, projected 24h cost |
-| `/vastai:setup` *(or `/vastai:setup <new-key>`)* | The 3-step setup walkthrough: store key → register SSH key → verify auth |
-| `/vastai:search gpu_name=RTX_4090` | Top 10 cheapest verified RTX 4090 offers |
-| `/vastai:launch <offer-id>` | Launch with defaults: pytorch image, 20 GB disk, `--ssh --direct`, auto label `claude-launch-<ts>` |
-| **Natural language: "what's my balance?"** | Skill auto-loads, agent runs `vastai show user --raw`, reports the balance |
-| **Natural language: "find me a cheap 4090"** | Either fires `/vastai:search` or runs `vastai search offers ... gpu_name=RTX_4090 ...` directly |
-| **Natural language: "kill instance 99999"** | Agent runs `vastai destroy instance 99999 -y --raw` (Vast returns "not found" since the ID is fake — that's fine) |
-
-> If `/help` doesn't show the commands, the plugin didn't load. Check the `--plugin-dir` path and that `$PLUGIN/.claude-plugin/plugin.json` exists.
-
----
-
-## Mode 2 — Single-prompt non-interactive (good for scripted checks)
-
-Useful for one-off probes or piping output into other tools.
-
-```bash
-source ./set-env.sh
-unset ANTHROPIC_API_KEY CLAUDE_API_KEY
-
-echo "what's running on my vast account?" | claude -p \
-  --plugin-dir "$PLUGIN" \
-  --allowed-tools "Bash(vastai:*) Bash(jq:*) Read"
-```
-
-Swap the prompt for any of these to spot-check:
-
-| Prompt | Should fire |
-|---|---|
-| `what's running on my vast account?` | `vastai show instances-v1 --raw` |
-| `what's my balance?` | `vastai show user --raw` |
-| `find me a cheap 4090` | `vastai search offers 'gpu_name=RTX_4090 ...' --raw` |
-| `list my volumes` | `vastai show volumes --raw` |
-| `show my serverless endpoints` | `vastai show endpoints --raw` |
-| `set HF_TOKEN to hf_abc123 as an env var` | `vastai create env-var HF_TOKEN hf_abc123 --raw` (sometimes `update env-var`) |
-
-To see exactly which CLI calls the agent made, pipe through `--output-format stream-json --include-partial-messages --verbose` and filter for `tool_use`:
-
-```bash
-echo "what's my balance?" | claude -p \
-  --plugin-dir "$PLUGIN" \
-  --allowed-tools "Bash(vastai:*) Bash(jq:*) Read" \
-  --output-format stream-json --include-partial-messages --verbose 2>/dev/null \
-  | jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use") | (.input.command // (.input | tostring))'
+# 4. Working tree on the right branch
+cd /Users/will/freelance/work/vast-plugins/workspace/repos/vast-claude-plugin
+git rev-parse --abbrev-ref HEAD            # → skills/split-renter-host
+PLUGIN=$PWD
 ```
 
 ---
 
-## Mode 3 — End-to-end live lifecycle (spends ≤ $0.50)
-
-The real test: launch a GPU, SSH in, run a command, destroy it. Use a unique label so the cleanup script can find leftovers.
+## Pre-flight ($0)
 
 ```bash
-source ./set-env.sh
-unset ANTHROPIC_API_KEY CLAUDE_API_KEY
-TS=$(date +%s)
+RUN_ID=claude-$(date +%Y%m%d-%H%M%S)
+OUT=/Users/will/freelance/work/vast-plugins/workspace/test-results/$RUN_ID
+mkdir -p "$OUT"
 
-echo "I want to verify a Vast.ai instance lifecycle end-to-end. Do all of this in one go and report what happened:
+vastai show user --raw         > "$OUT/baseline-user.json"
+vastai show instances-v1 --raw > "$OUT/baseline-instances.json"
+START_BAL=$(jq -r '.credit' "$OUT/baseline-user.json")
+echo "Starting balance: \$$START_BAL"
+[ "$(echo "$START_BAL < 2" | bc)" -eq 1 ] && { echo "BUDGET FAIL"; exit 1; }
 
-1. Find the cheapest verified RTX 4090 on-demand offer that is rentable (filter: gpu_name=RTX_4090 num_gpus=1 verified=true rentable=true), under \$0.40/hr.
-2. Launch it with the pytorch/pytorch image, --disk 20, --ssh, --direct, and label 'test-rivet-manual-$TS'.
-3. Poll show instance until actual_status is 'running' (max 5 minutes). If it hits exited/unknown/offline/created+stopped, stop and report.
-4. Once running, get the ssh-url and run 'nvidia-smi' on the instance via vastai execute.
-5. Destroy the instance with -y. Confirm it's gone via show instances-v1.
-6. Report: offer ID picked, instance ID, total elapsed time, nvidia-smi output (just the GPU line), and final destroy status." \
-  | claude -p \
-    --plugin-dir "$PLUGIN" \
-    --allowed-tools "Bash(vastai:*) Bash(jq:*) Bash(ssh:*) Bash(sleep:*) Bash(date:*) Read"
-```
+# Results template — tick boxes as you go
+cat > "$OUT/results.md" <<EOF
+# Claude self-test results — $RUN_ID
 
-**What to look for in the output:**
+## Phase 1 — Knowledge probes (text only)
+- [ ] p1.1 API key URL → response mentions console.vast.ai/manage-keys/
+- [ ] p1.2 Shared volumes → response says Vast doesn't offer / only local / use S3
+- [ ] p1.3 SSH command → response does NOT say \`ssh \$(vastai ssh-url ...)\`; shows --raw parsing
+- [ ] p1.4 Onstart 6000 chars → response mentions 4048 limit + gzip workaround
+- [ ] p1.5 Spot eviction → response identifies spot eviction; mentions change bid
 
-- Offer ID + price (should be ≤ $0.40/hr).
-- Instance ID and label that matches `test-rivet-manual-$TS`.
-- A polling loop that exits cleanly (no infinite loop on a terminal state).
-- `nvidia-smi` output containing your GPU's name (RTX 4090 expected).
-- A destroy confirmation and a final `instances_found: 0`.
-- Total spend: typically $0.02–$0.10 for 5–15 minutes.
+## Phase 2 — Command generation (vastai allowed, read-only)
+- [ ] p2.1 Balance → agent ran \`vastai show user --raw\`
+- [ ] p2.2 List instances → agent ran \`vastai show instances-v1 --raw --limit ...\`
+- [ ] p2.3 Search 4090 → \`vastai search offers ... RTX_4090 ... --raw\` with NO \`-n\`
+- [ ] p2.4 Kill 99999 → \`vastai destroy instance 99999 -y\`
+- [ ] p2.5 Set env var → \`vastai create env-var HF_TOKEN_SELFTEST hf_xxxxx_literal --raw\`
+- [ ] p2.6 Show machines → \`vastai show machines --raw\` (vastai-host loaded)
 
-### If anything goes sideways
+## Phase 3 — End-to-end lifecycle
+- [ ] p3.1 create-instance command included --disk
+- [ ] p3.2 create-instance command included --ssh
+- [ ] p3.3 create-instance command included --direct
+- [ ] p3.4 create-instance command included --cancel-unavail
+- [ ] p3.5 destroy used -y
+- [ ] p3.6 no leftover instances with label selftest-$RUN_ID-e2e
 
-The host machine might be broken (CDI device errors, container shim failures — that's a real Vast.ai failure mode, not a plugin bug). Re-run with the next-cheapest offer.
+## Phase 4 — Host skill routing (expect 401)
+- [ ] p4.1 host-metrics ran \`vastai metrics gpu*\`
+- [ ] p4.2 host-machines ran \`vastai show machines\`
+- [ ] p4.3 On 401, agent suggested checking permissions (NOT "reset api-key")
+EOF
 
-### Manual cleanup safety net
-
-Run after every Mode 3 test, and any time you suspect a leak:
-
-```bash
-vastai show instances-v1 --raw \
-  | jq -r '.instances[] | select(.label | tostring | startswith("test-rivet-")) | .id' \
+# Cleanup script — run by hand at the end OR via trap
+cat > "$OUT/cleanup.sh" <<EOF
+#!/usr/bin/env bash
+vastai show instances-v1 --raw --limit 200 \\
+  | jq -r '.instances[]? | select(.label | tostring | startswith("selftest-$RUN_ID-")) | .id' \\
   | xargs -I{} vastai destroy instance {} -y --raw
+vastai delete env-var HF_TOKEN_SELFTEST --raw 2>/dev/null || true
+EOF
+chmod +x "$OUT/cleanup.sh"
+echo "Cleanup script: $OUT/cleanup.sh"
 ```
 
 ---
 
-## Verifying state without running the plugin
+## Launch claude with the plugin
 
-Quick health checks that don't go through `claude`:
+In a fresh terminal (so the env vars from your `set-env.sh` are loaded):
 
 ```bash
-# auth + balance
-vastai show user --raw | jq '.email, .credit'
-
-# running instances
-vastai show instances-v1 --raw | jq '.instances_found, [.instances[] | {id, actual_status, label}]'
-
-# registered SSH keys
-vastai show ssh-keys --raw | jq '.[] | {id, public_key: (.public_key | .[0:50])}'
+cd /Users/will/freelance/work/vast-plugins/workspace/repos/vast-claude-plugin
+claude --plugin-dir "$PWD"
 ```
 
-If `show user` returns `{"error": true, "msg": "Invalid user key"}`, your saved key is bad — restore it:
+Sanity check inside the session — `/help` should list these five commands:
+
+```
+/vastai:setup    /vastai:status    /vastai:cost    /vastai:search    /vastai:launch
+```
+
+If they don't appear, the plugin didn't load — check `.claude-plugin/plugin.json` and the `--plugin-dir` path.
+
+---
+
+## Phase 1 — Knowledge probes (in claude session, $0)
+
+Paste each prompt exactly. The agent should answer in text. Save the response text into `$OUT/transcripts/p1-<slug>.txt` (just copy-paste from the chat), tick the box.
+
+> Tip: phase 1 prompts don't need any Bash tool, so the agent should reply without running `vastai`. If it does run `vastai`, that's fine — score on the final text.
+
+| # | Prompt | PASS if response mentions |
+|---|---|---|
+| 1.1 | *What URL do I go to to create a Vast.ai API key?* | `console.vast.ai/manage-keys/` (NOT `cloud.vast.ai/account`) |
+| 1.2 | *Can I share a single volume across multiple Vast.ai instances at the same time?* | "Vast doesn't offer" / "only local volumes" / suggests S3 via `cloud copy`. **FAIL** if it suggests `create network-volume`. |
+| 1.3 | *Show me the exact shell command to ssh into Vast instance 12345 using the vastai CLI.* | Parses `--raw` (`ssh_host`, `ssh_port`) or uses awk on the URL. **FAIL** if it says `ssh $(vastai ssh-url 12345)`. |
+| 1.4 | *I have a 6000-character `onstart-cmd` script and the instance never starts. What's wrong?* | "4048-character limit" + gzip+base64 or `--onstart FILE` |
+| 1.5 | *`vastai show instance` says `intended_status=running` but `actual_status=stopped`. What's going on?* | Identifies spot eviction; mentions `change bid` or `--bid_price` |
+
+---
+
+## Phase 2 — Command generation (in claude session, $0)
+
+Same session. Claude will run `vastai` because the skill auto-loads with `allowed-tools: Bash(vastai:*)`. Each tool call shows in the chat — watch for the exact command.
+
+| # | Prompt | PASS if agent ran |
+|---|---|---|
+| 2.1 | *What's my Vast.ai credit balance?* | `vastai show user --raw` |
+| 2.2 | *Show me a JSON list of my running instances.* | `vastai show instances-v1 --raw …` **with `--limit`** |
+| 2.3 | *Find the cheapest verified RTX 4090 under $0.40/hr with `compute_cap>=70`.* | `vastai search offers … RTX_4090 … --raw` with **no** ` -n ` or `--no-default` |
+| 2.4 | *Kill Vast instance 99999.* | `vastai destroy instance 99999 -y` (404 from Vast is expected — that's fine) |
+| 2.5 | *Create a Vast account env var called `HF_TOKEN_SELFTEST` with the value `hf_xxxxx_literal`.* | `vastai create env-var HF_TOKEN_SELFTEST hf_xxxxx_literal --raw` (**literal value**) |
+| 2.6 | *Show me my Vast.ai hosted machines.* | `vastai show machines --raw` — and the `vastai-host` skill name appears in the preamble (not `vastai`) |
+
+Cleanup the env var after phase 2 (the cleanup script does this too, but earlier is safer):
+```bash
+vastai delete env-var HF_TOKEN_SELFTEST --raw
+```
+
+---
+
+## Phase 3 — End-to-end lifecycle ($0.20–$0.50)
+
+Still in the same claude session. Paste this single prompt — substitute `<RUN_ID>` with your actual `$RUN_ID` value:
+
+> *You are validating the vastai plugin against a live account. Do all of this end-to-end and report what happened:*
+>
+> *1. Find the cheapest verified single-GPU offer with `compute_cap>=70` and `rentable=true` under $0.50/hr. Prefer RTX 4090 but accept anything cheaper that meets those filters.*
+> *2. Launch it with image `vastai/pytorch:@vastai-automatic-tag`, `--disk 20`, `--ssh`, `--direct`, `--cancel-unavail`, and `--label 'selftest-<RUN_ID>-e2e'`.*
+> *3. Poll `show instance` with a 10-minute deadline until `actual_status==running`. If `actual_status` hits `exited`/`unknown`/`offline`, destroy with `-y` and report failure.*
+> *4. Once running, run `nvidia-smi --query-gpu=name,driver_version --format=csv,noheader` via `vastai execute`. Capture stdout.*
+> *5. Destroy the instance with `-y`. Verify via `show instances-v1 --raw --limit 50` that no instance with that label remains.*
+> *6. Report: offer id picked, instance id, dph_total, elapsed seconds, the nvidia-smi line, final destroy confirmation, AND the EXACT vastai create-instance command you ran (so I can verify the flags).*
+
+**In a side terminal, watch progress and the create-instance command:**
 
 ```bash
-source ./set-env.sh
-vastai set api-key "$VAST_API_KEY" --raw
+# Watch instance state
+watch -n 5 "vastai show instances-v1 --raw --limit 50 | jq '[.instances[] | select(.label | tostring | startswith(\"selftest-$RUN_ID-\"))] | .[] | {id, actual_status, label, dph_total}'"
+```
+
+**After it finishes:**
+
+Paste the agent's reported create-instance command into `$OUT/p3-create.txt`, then:
+
+```bash
+grep -q -- '--disk'            "$OUT/p3-create.txt" && echo "p3.disk PASS"            || echo "p3.disk FAIL"
+grep -q -- '--ssh'             "$OUT/p3-create.txt" && echo "p3.ssh PASS"             || echo "p3.ssh FAIL"
+grep -q -- '--direct'          "$OUT/p3-create.txt" && echo "p3.direct PASS"          || echo "p3.direct FAIL"
+grep -q -- '--cancel-unavail'  "$OUT/p3-create.txt" && echo "p3.cancel-unavail PASS"  || echo "p3.cancel-unavail FAIL"
+
+LEFTOVER=$(vastai show instances-v1 --raw --limit 200 | jq "[.instances[]? | select(.label==\"selftest-$RUN_ID-e2e\")] | length")
+[ "$LEFTOVER" = "0" ] && echo "p3.no-leftover PASS" || echo "p3.no-leftover FAIL ($LEFTOVER leftover)"
+```
+
+**Known false positive:** host self-destruct (CDI errors, container shim) is a real Vast bug, not a plugin bug. If the agent correctly destroys+reports, that's still a P3 PASS. Re-run on a different offer to exercise nvidia-smi.
+
+---
+
+## Phase 4 — Host skill routing ($0, expect 401)
+
+Same claude session. I don't have a host account, so host commands 401 — the test is that the agent loads `vastai-host`, runs the right command, and interprets the 401 with scoped-permission guidance.
+
+| # | Prompt | PASS if |
+|---|---|---|
+| 4.1 | *What's the going hourly rate for RTX 4090s in US datacenters right now according to Vast.ai's marketplace metrics?* | Agent ran `vastai metrics gpu` (or `metrics gpu-locations`); on 401, suggested checking permission scope with `vastai show api-keys --raw` (NOT "reset api-key") |
+| 4.2 | *List my Vast.ai hosted machines.* | Agent ran `vastai show machines --raw`; same scoped-permission guidance on 401 |
+
+---
+
+## Phase 5 — Plugin-load mechanics (automated, $0)
+
+```bash
+# Plugin manifest valid
+jq . "$PLUGIN/.claude-plugin/plugin.json" >/dev/null && echo "p5.manifest PASS" || echo "p5.manifest FAIL"
+
+# Both skills present
+[ -f "$PLUGIN/skills/vastai/SKILL.md" ]      && echo "p5.skill-renter PASS" || echo "p5.skill-renter FAIL"
+[ -f "$PLUGIN/skills/vastai-host/SKILL.md" ] && echo "p5.skill-host PASS"   || echo "p5.skill-host FAIL"
+
+# All 5 slash commands present
+for cmd in setup status cost search launch; do
+  [ -f "$PLUGIN/commands/$cmd.md" ] && echo "p5.cmd-$cmd PASS" || echo "p5.cmd-$cmd FAIL"
+done
+```
+
+Manual check inside claude: type `/help` and confirm all five `/vastai:*` commands appear. Tick this box in the results:
+
+```
+- [ ] p5.help-lists-all → /help shows /vastai:{setup,status,cost,search,launch}
 ```
 
 ---
 
-## Known false-positive in the test corpus
+## Final report
 
-When you try natural-language prompts, expect these to behave conservatively (they are **not** plugin bugs):
+```bash
+{
+  echo "# Self-test report — $RUN_ID"
+  echo
+  echo "**Plugin:** vast-claude-plugin"
+  echo "**Branch:** $(git -C "$PLUGIN" rev-parse --abbrev-ref HEAD) ($(git -C "$PLUGIN" rev-parse --short HEAD))"
+  echo "**Started:** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  END_BAL=$(vastai show user --raw | jq -r .credit)
+  echo "**Balance:** \$$START_BAL → \$$END_BAL (spent \$$(echo "$START_BAL - $END_BAL" | bc))"
+  echo
+  cat "$OUT/results.md"
+} > "$OUT/REPORT.md"
 
-- **"tear down all my instances"** — agent will list instances first and ask for confirmation rather than bulk-destroying. Safety reflex.
-- **"rotate my SSH key"** — agent will ask which key (host SSH vs Vast SSH key id) before acting.
-- **"snapshot 12345 to myrepo"** — agent will ask whether `myrepo` is a Docker Hub repo or a Vast volume target.
+# Always cleanup
+"$OUT/cleanup.sh"
 
-If you want non-interactive behavior for these, prefix the prompt with *"just do it, no clarifying questions"*.
+# Confirm no leak
+vastai show instances-v1 --raw --limit 200 \
+  | jq "[.instances[]? | select(.label | tostring | startswith(\"selftest-$RUN_ID-\"))] | length" \
+  | grep -q '^0$' && echo "CLEAN" || echo "LEAK — manual cleanup needed"
+```
 
 ---
 
-## Filing bugs
+## Pass/fail matrix
 
-If the plugin emits a call that drops `--raw`, drops `-y` on destroy, or tries to launch without first registering an SSH key, that's a real bug. File against:
+| Phase | Tests | Automated? | Failure means |
+|---|---:|:---:|---|
+| 1 Knowledge | 5 | manual (chat) | Skill content didn't surface — content fix in SKILL.md |
+| 2 Command-gen | 6 | manual (chat) | Agent dropped a required flag or used `-n` |
+| 3 E2E | 6 | partly (shell verify) | Real launch broken or critical flags missing |
+| 4 Host routing | 3 | manual (chat) | Wrong skill loaded or 401 handling regressed |
+| 5 Mechanics | 9 | yes | Layout broken or plugin won't load |
 
-- **Plugin behaviour** → [CWORK-1028](https://linear.app/teraflop/issue/CWORK-1028)
-- **`SKILL.md` content** (most "agent did the wrong vastai call" issues land here) → upstream PR to [`vast-ai/vast-cli`](https://github.com/vast-ai/vast-cli) (see `PATCHES.md` in this repo for our pending local patches).
+**Total: 29 checks.** ≥26/29 (≥90%) to publish.
+
+---
+
+## Manual followup (always)
+
+```bash
+vastai show instances-v1 --raw --limit 200 \
+  | jq -r '.instances[]? | select(.label | tostring | startswith("selftest-")) | "\(.id)  \(.label)  \(.actual_status)"'
+```
+
+Any output = leak. `vastai destroy instance <id> -y --raw` to clean up.
