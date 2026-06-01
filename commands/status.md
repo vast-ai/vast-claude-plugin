@@ -12,9 +12,9 @@ Show the current state of one or all Vast.ai instances. Does **not** poll — th
 
 1. **If `$ARGUMENTS` is empty:** list all instances.
    ```
-   vastai show instances-v1 --raw --limit 25
+   vastai show instances-v1 --raw -a
    ```
-   `--limit 25` (the per-page max) short-circuits the interactive `Fetch next page? (y/N)` prompt that otherwise fires after the first page even under `--raw`. For accounts with > 25 instances, pass `-a` / `--all` to auto-fetch all pages.
+   `-a` / `--all` auto-fetches every page, sidestepping the interactive `Fetch next page? (y/N)` prompt that otherwise fires under `--raw`. If you only need one page, pass `--limit <N>` instead — read the current per-page cap from `vastai show instances-v1 --help`.
 
    The response is an object `{instances: [...], instances_found: N}`. Group `instances[]` by `actual_status` (running / loading / exited / stopped / unknown / offline). Show id, label, gpu_name, num_gpus, and `$/hr` for each.
 

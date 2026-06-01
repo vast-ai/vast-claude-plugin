@@ -166,7 +166,7 @@ vastai create instance <OFFER_ID> --image vastai/comfy:@vastai-automatic-tag --d
 
 Browse pre-configured models at <https://vast.ai/model-library>.
 
-> **vLLM gotcha:** vLLM requires CUDA compute capability ≥ 7.0. Vast's `compute_cap` field is the CUDA compute capability **multiplied by 100** — `vastai search offers --help` documents the encoding verbatim: *"cuda compute capability\*100 (ie: 650 for 6.5, 700 for 7.0)"*. So the right threshold is `compute_cap>=700`, not `compute_cap>=70`. Always re-read `vastai search offers --help` for the current field semantics rather than relying on memorized per-GPU values — the encoding rule, not a card-by-card table, is the source of truth.
+> **vLLM gotcha:** vLLM requires a minimum CUDA compute capability. Vast's `compute_cap` field is **not** the raw `X.Y` decimal — it's an integer encoding. Read the current encoding from `vastai search offers --help` (the field's description line shows examples), pick the threshold for your target compute capability, and filter with that exact integer. If you guess based on the decimal version, the filter will silently let unsupported GPUs through and vLLM will fail at runtime with `no kernel image is available`.
 
 ## Commands
 
@@ -213,7 +213,7 @@ vastai accept price-increase <id>                        # Accept pending host p
 - `--label LABEL` — Instance label
 - `--env ENV` — Env vars and port mappings, e.g. `'-e TZ=UTC -p 8080:8080'`
 - `--onstart FILE` — Path to a startup script file
-- `--onstart-cmd CMD` — Inline startup script. The server-side hard limit is **16384 characters** (per the API's `400/3471` error: *"Invalid args: len(image) > 1024, or len(args) > 16384, or len(label) > 256"*). Empirically verified: 10000-char `--onstart-cmd` payloads are accepted and the instance boots; 100000-char payloads fail at the create call with the above 400. For scripts approaching 16 KB, either use `--onstart FILE` (uploads the file directly, sidestepping the arg-length cap) or gzip+base64 the script and decode inside the command — see "Long onstart scripts" below
+- `--onstart-cmd CMD` — Inline startup script. The server enforces a length cap on `args`; payloads above the cap are rejected at `create instance` with `error 400/3471: Invalid args: len(args) > N` (`N` is whatever the server is currently configured to). If you hit it, **read the error for the current limit**, then either pass `--onstart FILE` (uploads the file, sidesteps the arg cap entirely) or gzip+base64 the script and decode inline — see "Long onstart scripts" below
 - `--entrypoint` / `--args ...` — Override entrypoint and pass args (args must be last)
 - `--bid_price PRICE` — Interruptible (spot) pricing in $/hr
 - `--template_hash HASH` — Create from template
@@ -221,7 +221,7 @@ vastai accept price-increase <id>                        # Accept pending host p
 - `--link-volume <VOLUME_ID> --mount-path /root/vol` — Attach existing volume
 - `--login '-u USER -p PASS docker.io'` — Private registry credentials
 
-**Long onstart scripts (approaching or over 16384 chars):**
+**Long onstart scripts (anything risking the server's arg-length cap — see `--onstart-cmd` note above):**
 
 ```bash
 SCRIPT_B64=$(gzip -c ./long_script.sh | base64 -w0)
@@ -306,7 +306,7 @@ echo "http://$IP:$PORT"
 vastai search offers                                     # Default: verified, on-demand, score-sorted
 vastai search offers 'gpu_name=RTX_4090 num_gpus=1 verified=true direct_port_count>=1' -o 'dlperf_usd-'
 vastai search offers 'num_gpus>=4 reliability>0.99' -o 'num_gpus-'
-vastai search offers 'gpu_ram>=8 num_gpus=1 compute_cap>=700' -o 'dph_total' --limit 10  # compute >= 7.0; encoding from `vastai search offers --help`
+vastai search offers 'gpu_ram>=8 num_gpus=1 compute_cap>=<THRESHOLD>' -o 'dph_total' --limit 10  # Derive <THRESHOLD> from `vastai search offers --help` (compute_cap encoding) for your target CUDA capability — see the vLLM gotcha above
 vastai search offers --type bid                          # Interruptible (spot) pricing
 vastai search offers --type reserved                     # Reserved pricing
 vastai search offers 'verified=any rentable=any gpu_name=H100_SXM'  # Widen specific defaults — see "Hidden defaults" above
@@ -493,12 +493,12 @@ Common prompts and the calls they map to:
 ### Billing
 
 ```bash
-vastai show invoices-v1 --limit 50 --latest-first        # Always pass --limit to avoid the (y/N) pagination prompt
-vastai show invoices-v1 --charges --limit 50 --latest-first              # Charges only
-vastai show invoices-v1 -c --charge-type i v s --limit 50 --latest-first # i=instance v=volume s=serverless
-vastai show invoices-v1 --invoices --limit 50 --latest-first             # Invoices only
-vastai show invoices-v1 --start-date 2026-01-01 --end-date 2026-02-01 --limit 200
-vastai show invoices-v1 -c --format tree --verbose --limit 50 --latest-first  # Full details (tree only)
+vastai show invoices-v1 --limit <N> --latest-first        # Always pass --limit to avoid the (y/N) pagination prompt; cap is in `--help`
+vastai show invoices-v1 --charges --limit <N> --latest-first              # Charges only
+vastai show invoices-v1 -c --charge-type i v s --limit <N> --latest-first # i=instance v=volume s=serverless
+vastai show invoices-v1 --invoices --limit <N> --latest-first             # Invoices only
+vastai show invoices-v1 --start-date <YYYY-MM-DD> --end-date <YYYY-MM-DD> --limit <N>
+vastai show invoices-v1 -c --format tree --verbose --limit <N> --latest-first  # Full details (tree only)
 vastai show invoices-v1 --next-token <TOKEN>             # Resume pagination explicitly
 vastai show deposit <id>                                 # Reserved instance deposit info
 ```
@@ -558,7 +558,7 @@ vastai tfa delete --id-to-delete METHOD_ID --code CODE [-t METHOD]        # Remo
 | `No offers found` | Filters too restrictive (often blocked by hidden defaults) | Override the specific default (`verified=any`, `rentable=any`) — see "Hidden defaults" in Query syntax. Do NOT pass `-n` to drop all defaults. |
 | `Permission denied` (SSH) | No SSH key attached | `vastai create ssh-key` BEFORE `create instance` |
 | `Connection refused` | Instance not yet running | Poll `show instance <id>` until `actual_status == "running"` |
-| `no kernel image is available` (vLLM) | CUDA compute capability < 7.0 | Filter `compute_cap>=700`. The `compute_cap` field is `cuda_compute_capability * 100` (see `vastai search offers --help`), so `>=70` does NOT mean 7.0 — it lets every modern GPU through. |
+| `no kernel image is available` (vLLM or similar) | The launched GPU's CUDA compute capability is below what the workload requires | Filter `compute_cap` in the search query. `compute_cap` is an encoded integer, not the decimal version — read its description in `vastai search offers --help` to pick the right threshold. |
 | Hangs on `destroy instance` | Confirmation prompt | Add `-y`: `vastai destroy instance <id> -y` |
 | Wrong host port | Reading `-p 8000:8000` literally | Read `.ports."8000/tcp"[0].HostPort` from `show instance --raw` |
 
