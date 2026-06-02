@@ -1,0 +1,10 @@
+# Working-tree artifacts, not part of the shipped plugin
+PR.md
+
+# Scratch / editor / OS
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+*.log
