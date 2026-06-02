@@ -472,8 +472,7 @@ vastai create subaccount --email sub@example.com --username sub --password '<pw>
 User-scoped environment variables injected into instances at launch — for API tokens (HuggingFace, OpenAI, etc.) and model config.
 
 ```bash
-vastai show env-vars --raw                               # List names only (values are masked as '*****')
-vastai show env-vars -s --raw                            # Include values (-s / --show-values is required to reveal them)
+vastai show env-vars --raw                               # List names only — values are ALWAYS masked as '********', even with -s/--show-values (verified CLI 1.0.13). There is no working way to retrieve env-var values via the CLI; treat them as write-only.
 vastai create env-var HF_TOKEN hf_abc123 --raw           # Create (value passed literally)
 vastai update env-var HF_TOKEN hf_new456 --raw
 vastai delete env-var HF_TOKEN --raw
@@ -508,11 +507,11 @@ vastai show deposit <id>                                 # Reserved instance dep
 
 ### Teams
 
-**Subcommand-name version skew on team creation.** Newer CLIs expose `vastai create-team` (hyphenated, with `--team-name`); older CLIs expose `vastai create team` (with a space, taking `--team-name` or just a positional name). Before running, check which form your CLI parses: `vastai --help 2>&1 | grep -E 'create[ -]team'`. The skill below shows the hyphenated form; if the parser rejects it, drop the hyphen and retry. Either way, the flag is `--team-name`, not `--name`.
+**Subcommand-name version skew on team creation.** Verified primary form on CLI 1.0.13 is `vastai create team` (space, with `--team-name`). Some newer/older CLIs expose `vastai create-team` (hyphenated). If the space form returns `invalid choice`, try hyphenated; if hyphenated returns `invalid choice`, try space. Either way the flag is `--team-name`, not `--name`.
 
 ```bash
-vastai create-team --team-name "myteam"                  # Hyphenated subcommand on newer CLIs. If parser rejects, try `vastai create team --team-name "myteam"`. Returns "Cannot create a team within a team" if the account is already in a team — check `vastai show members --raw` first; if it returns members, you're in a team and must leave/destroy it before creating a new one.
-vastai create-team --team-name "myteam" --transfer-credit 50  # Optionally seed from personal credit
+vastai create team --team-name "myteam"                  # Space form (primary on CLI 1.0.13). If parser rejects, try `vastai create-team --team-name "myteam"`. Returns "Cannot create a team within a team" if the account is already in a team — check `vastai show members --raw` first; if it returns members, you're in a team and must leave/destroy it before creating a new one.
+vastai create team --team-name "myteam" --transfer-credit 50  # Optionally seed from personal credit
 vastai destroy team
 vastai show members
 vastai show team-roles                                   # ALWAYS run this first when inviting — roles are TEAM-DEFINED, not a fixed enum. "billing-admin", "viewer" etc. are NOT preset; using an unknown role name triggers a generic HTTP 500.
