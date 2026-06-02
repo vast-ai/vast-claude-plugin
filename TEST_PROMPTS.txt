@@ -75,6 +75,8 @@ Create a serverless workergroup for endpoint <ENDPOINT_ID> using template hash <
 
 Benchmark template <TEMPLATE_HASH> across 1, 2, and 4 GPUs.
 
+Delete template <TEMPLATE_HASH>.
+
 /vast:setup
 
 /vast:cost
