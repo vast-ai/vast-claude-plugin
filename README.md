@@ -5,7 +5,9 @@ A [Claude Code](https://claude.com/claude-code) plugin for [Vast.ai](https://vas
 The plugin combines two layers:
 
 - **Five slash commands** wrap the highest-frequency renter operations with safe defaults.
-- **A bundled `vastai` skill** gives Claude full command-reference knowledge of the `vastai` CLI, so anything the slash commands don't cover (ssh, copy, logs, exec, destroy, volumes, serverless, environment variables, …) works through natural language.
+- **Two bundled skills** give Claude full command-reference knowledge of the `vastai` CLI, so anything the slash commands don't cover works through natural language:
+  - **`vastai`** — renter operations: search and launch instances, SSH, copy, logs, exec, destroy, volumes, serverless, env vars, billing.
+  - **`vastai-host`** — GPU provider operations: list/unlist machines, pricing, maintenance windows, self-tests, earnings, marketplace metrics. Auto-loads on host-intent prompts.
 
 ## Slash commands
 
@@ -19,9 +21,11 @@ The plugin combines two layers:
 
 Every `vastai` invocation includes `--raw` so responses come back as parseable JSON.
 
-## Natural language (the skill)
+## Natural language (the skills)
 
-Anything outside the slash-command set works conversationally. The bundled `vastai` skill auto-loads when Claude detects Vast-related intent — GPU rental, SSH, copying files to/from an instance, env vars, billing, serverless, volumes, and so on.
+Anything outside the slash-command set works conversationally. The right skill auto-loads based on intent.
+
+**Renter prompts** load `vastai`:
 
 > *"Find a verified 4090 under $0.40/hr and launch it with pytorch."*
 >
@@ -31,7 +35,17 @@ Anything outside the slash-command set works conversationally. The bundled `vast
 >
 > *"Destroy everything except instance 12345."*
 
-To force the skill to load explicitly, mention it by name (*"using the vastai skill, …"*).
+**Host prompts** load `vastai-host`:
+
+> *"List my machine 98765 at $0.30/GPU/hr."*
+>
+> *"Schedule maintenance on machine 98765 next Tuesday at 02:00 UTC for 4 hours."*
+>
+> *"Show my host earnings for last month."*
+>
+> *"What's the going rate for RTX 4090s in the US right now?"*
+
+To force a skill to load explicitly, mention it by name (*"using the vastai skill, …"* or *"using the vastai-host skill, …"*).
 
 ## Install
 
@@ -60,25 +74,25 @@ claude --plugin-dir ./vast-claude-plugin
 /vastai:setup
 ```
 
-You'll be prompted for an API key from <https://cloud.vast.ai/account>. The command then registers your SSH public key (`~/.ssh/id_ed25519.pub` by default, falling back to `id_rsa.pub`) and verifies the credential by querying your user record.
+You'll be prompted for an API key from <https://console.vast.ai/manage-keys/>. The command then registers your SSH public key (`~/.ssh/id_ed25519.pub` by default, falling back to `id_rsa.pub`) and verifies the credential by querying your user record.
 
 ## Layout
 
 ```
 vast-claude-plugin/
-├── .claude-plugin/plugin.json   # marketplace manifest
+├── .claude-plugin/plugin.json    # marketplace manifest
 ├── commands/
-│   ├── setup.md                 # /vastai:setup
-│   ├── status.md                # /vastai:status
-│   ├── cost.md                  # /vastai:cost
-│   ├── search.md                # /vastai:search
-│   └── launch.md                # /vastai:launch
-├── skills/vastai/SKILL.md       # vendored from vast-ai/vast-cli
-├── VENDORED_FROM.md             # pins the upstream SHA
-├── PATCHES.md                   # local deltas pending upstream PRs
-└── TESTING.md                   # acceptance test plan
+│   ├── setup.md                  # /vastai:setup
+│   ├── status.md                 # /vastai:status
+│   ├── cost.md                   # /vastai:cost
+│   ├── search.md                 # /vastai:search
+│   └── launch.md                 # /vastai:launch
+├── skills/
+│   ├── vastai/SKILL.md           # renter skill
+│   └── vastai-host/SKILL.md      # GPU provider / host skill
+└── TESTING.md                    # acceptance test plan
 ```
 
 ## License
 
-MIT — see [LICENSE](./LICENSE). `SKILL.md` is vendored from [`vast-ai/vast-cli`](https://github.com/vast-ai/vast-cli) (also MIT); local edits are tracked in [`PATCHES.md`](./PATCHES.md) for upstream propagation.
+MIT — see [LICENSE](./LICENSE).

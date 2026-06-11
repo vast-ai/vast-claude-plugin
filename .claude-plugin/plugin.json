@@ -7,10 +7,7 @@
     "url": "https://vast.ai"
   },
   "homepage": "https://vast.ai",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/vast-ai/vast-claude-plugin"
-  },
+  "repository": "https://github.com/vast-ai/vast-claude-plugin",
   "license": "MIT",
   "logo": "assets/logo.svg",
   "keywords": ["gpu", "cloud", "ml", "vast", "vastai", "instances", "serverless"]
