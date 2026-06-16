@@ -1,0 +1,14 @@
+{
+  "name": "vast-ai",
+  "owner": {
+    "name": "Vast.ai",
+    "url": "https://vast.cloud.ai"
+  },
+  "plugins": [
+    {
+      "name": "vastai",
+      "source": "./",
+      "description": "Manage Vast.ai GPU instances, volumes, serverless endpoints, and billing from Claude Code. Natural-language driven via the bundled vastai skill, with five slash commands for hot-path operations."
+    }
+  ]
+}
